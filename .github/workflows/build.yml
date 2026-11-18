@@ -113,21 +113,21 @@ jobs:
       - name: 10. 整理固件包并重命名为 xr30-emmc
         working-directory: ./openwrt
         run: |
-          mkdir -p ../release_files
+          mkdir -p "$GITHUB_WORKSPACE/release_files"
           cd bin/targets/mediatek/filogic/
           for file in *rax3000m*; do
             [ -e "$file" ] || continue
             newname="${file/rax3000m/xr30-emmc}"
-            cp "$file" "../../../../release_files/$newname"
+            cp "$file" "$GITHUB_WORKSPACE/release_files/$newname"
           done
-          ls -lh ../../../../release_files/
+          ls -lh "$GITHUB_WORKSPACE/release_files/"
 
       - name: 11. 自动发布固件至 GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: xr30-emmc-${{ github.event.inputs.branch_name || 'openwrt-25.12' }}-${{ github.run_number }}
           name: CMCC XR30 eMMC 纯净 NAS 版 (${{ github.event.inputs.branch_name || 'openwrt-25.12' }})
-          files: release_files/*
+          files: ${{ github.workspace }}/release_files/*
           body: |
             - **源码版本**：ImmortalWrt 官方纯净版 `${{ github.event.inputs.branch_name || 'openwrt-25.12' }}`
             - **设备型号**：`CMCC XR30 eMMC version`
