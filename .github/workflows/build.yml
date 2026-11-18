@@ -1,0 +1,138 @@
+name: Build ImmortalWrt 25.12.2 for CMCC XR30 eMMC
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_version:
+        description: 'ImmortalWrt 官方标签版本'
+        required: true
+        default: 'v25.12.2'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: 1. 检出当前仓库
+        uses: actions/checkout@v4
+
+      - name: 2. 安装官方编译环境依赖并释放磁盘空间
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo apt-get update -y
+          sudo apt-get install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison \
+            build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar \
+            flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man \
+            intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev \
+            libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev \
+            libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip \
+            p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils \
+            python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig \
+            texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
+          df -hT
+
+      - name: 3. 拉取 ImmortalWrt 官方纯净源码
+        run: |
+          for i in 1 2 3; do
+            git clone --depth 1 -b ${{ github.event.inputs.tag_version || 'v25.12.2' }} https://github.com openwrt && break || sleep 10
+          done
+
+      - name: 4. 定制型号名称为 CMCC XR30 eMMC
+        working-directory: ./openwrt
+        run: |
+          sed -i 's/CMCC RAX3000M (eMMC)/CMCC XR30 eMMC/g' target/linux/mediatek/dts/mt7981b-cmcc-rax3000m-emmc.dts 2>/dev/null || true
+          sed -i 's/CMCC RAX3000Me/CMCC XR30 eMMC/g' target/linux/mediatek/image/filogic.mk 2>/dev/null || true
+
+      - name: 5. 更新并安装官方纯净软件源 (Feeds)
+        working-directory: ./openwrt
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: 6. 生成纯净 NAS 固件配置 (.config)
+        working-directory: ./openwrt
+        run: |
+          cat << 'EOF' > .config
+          # 基础硬件平台：MT7981B (Filogic) - CMCC RAX3000Me / XR30 eMMC
+          CONFIG_TARGET_mediatek=y
+          CONFIG_TARGET_mediatek_filogic=y
+          CONFIG_TARGET_mediatek_filogic_DEVICE_cmcc_rax3000m-emmc=y
+
+          # 基础中文网页管理界面 (LuCI)
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-base=y
+          CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+          CONFIG_PACKAGE_luci-compat=y
+
+          # 核心功能 1：磁盘管理 (DiskMan) 及完整文件系统支持
+          CONFIG_PACKAGE_luci-app-diskman=y
+          CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y
+          CONFIG_PACKAGE_e2fsprogs=y
+          CONFIG_PACKAGE_parted=y
+          CONFIG_PACKAGE_blkid=y
+          CONFIG_PACKAGE_lsblk=y
+          CONFIG_PACKAGE_kmod-fs-ext4=y
+          CONFIG_PACKAGE_kmod-fs-exfat=y
+          CONFIG_PACKAGE_kmod-fs-ntfs3=y
+          CONFIG_PACKAGE_kmod-usb-storage=y
+          CONFIG_PACKAGE_kmod-usb-storage-uas=y
+
+          # 核心功能 2：网络共享 (Samba4局域网共享)
+          CONFIG_PACKAGE_luci-app-samba4=y
+          CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y
+          CONFIG_PACKAGE_wsdd2=y
+
+          # 核心功能 3：Transmission 下载器
+          CONFIG_PACKAGE_luci-app-transmission=y
+          CONFIG_PACKAGE_luci-i18n-transmission-zh-cn=y
+          CONFIG_PACKAGE_transmission-daemon=y
+          CONFIG_PACKAGE_transmission-web-control=y
+          EOF
+          make defconfig
+
+      - name: 7. 启用 dl 源码下载缓存加速
+        uses: actions/cache@v4
+        with:
+          path: openwrt/dl
+          key: immortalwrt-dl-${{ github.event.inputs.tag_version || 'v25.12.2' }}-${{ hashFiles('openwrt/.config') }}
+          restore-keys: |
+            immortalwrt-dl-${{ github.event.inputs.tag_version || 'v25.12.2' }}-
+            immortalwrt-dl-
+
+      - name: 8. 多线程预下载并清理残缺包
+        working-directory: ./openwrt
+        run: |
+          make download -j8
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+          make download -j4
+
+      - name: 9. 开始编译固件
+        working-directory: ./openwrt
+        run: |
+          make -j$(nproc) IGNORE_ERRORS=m V=s
+
+      - name: 10. 整理固件包并重命名为 xr30-emmc
+        working-directory: ./openwrt
+        run: |
+          mkdir -p ../release_files
+          cd bin/targets/mediatek/filogic/
+          for file in *rax3000m-emmc*; do
+            [ -e "$file" ] || continue
+            newname="${file/rax3000m-emmc/xr30-emmc}"
+            cp "$file" "../../../../release_files/$newname"
+          done
+          ls -lh ../../../../release_files/
+
+      - name: 11. 自动发布固件至 GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: xr30-emmc-${{ github.event.inputs.tag_version || 'v25.12.2' }}-${{ github.run_number }}
+          name: CMCC XR30 eMMC 纯净 NAS 版 (${{ github.event.inputs.tag_version || 'v25.12.2' }})
+          files: release_files/*
+          body: |
+            - **源码版本**：ImmortalWrt 官方纯净版 `${{ github.event.inputs.tag_version || 'v25.12.2' }}`
+            - **包含功能**：磁盘管理 (`luci-app-diskman`)、网络共享 (`luci-app-samba4`)、BT/PT 下载 (`luci-app-transmission`)
+            - **刷机提示**：从老版本（21.02 / 23.05）升级至 25.12 时，请务必先刷入本发布页中的新版 `preloader` 与 `uboot.fip` 引导文件，再刷入 `sysupgrade` 固件
