@@ -30,7 +30,8 @@ jobs:
 
       - name: 3. 拉取 ImmortalWrt 官方纯净源码 (严格校验)
         run: |
-          git clone --depth 1 -b ${{ github.event.inputs.branch_name || 'openwrt-25.12' }} https://github.com openwrt
+                 REPO="immortalwrt/immortalwrt.git"
+       git clone --depth 1 -b ${{ github.event.inputs.branch_name || 'openwrt-25.12' }} "https://github.com{REPO}" openwrt
           ls -ld openwrt/scripts
 
       - name: 4. 修改底层设备树型号为 CMCC XR30 eMMC version
