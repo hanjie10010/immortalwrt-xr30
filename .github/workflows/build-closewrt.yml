@@ -1,0 +1,140 @@
+name: Build CloseWrt 25.12 (MTK Closed-Source) for CMCC XR30 eMMC
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch_name:
+        description: 'chasey-dev 仓库分支名 (默认 25.12)'
+        required: true
+        default: '25.12'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: 1. 检出当前仓库
+        uses: actions/checkout@v4
+
+      - name: 2. 极速安装编译环境依赖 (约2分钟)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
+            python3-setuptools python3-dev rsync unzip zlib1g-dev file wget \
+            curl cpio qemu-utils squashfs-tools zstd device-tree-compiler swig time
+
+      - name: 3. 拉取 chasey-dev 闭源驱动源码 (防吞链接校验)
+        run: |
+          PROTO="https"
+          HOST="github.com"
+          REPO="chasey-dev/immortalwrt-mt798x-rebase.git"
+          git clone --depth 1 -b ${{ github.event.inputs.branch_name || '25.12' }} "${PROTO}://${HOST}/${REPO}" openwrt
+          ls -ld openwrt/scripts
+
+      - name: 4. 修改底层设备树型号为 CMCC XR30 eMMC version
+        working-directory: ./openwrt
+        run: |
+          sed -i 's/CMCC RAX3000M/CMCC XR30 eMMC version/g' target/linux/mediatek/dts/mt7981b-cmcc-rax3000m*.dts
+          sed -i 's/CMCC RAX3000M/CMCC XR30 eMMC version/g' target/linux/mediatek/image/filogic.mk
+
+      - name: 5. 更新并安装软件源 (Feeds)
+        working-directory: ./openwrt
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: 6. 生成闭源无线 + 纯净 NAS 固件配置 (.config)
+        working-directory: ./openwrt
+        run: |
+          cat << 'EOF' > .config
+          # 基础硬件平台：MT7981B (Filogic) - CMCC RAX3000M / XR30 eMMC
+          CONFIG_TARGET_mediatek=y
+          CONFIG_TARGET_mediatek_filogic=y
+          CONFIG_TARGET_mediatek_filogic_DEVICE_cmcc_rax3000m=y
+
+          # 基础中文网页管理界面 (LuCI)
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-base=y
+          CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+          CONFIG_PACKAGE_luci-compat=y
+
+          # 联发科闭源 Wi-Fi 与硬件加速管理界面
+          CONFIG_PACKAGE_luci-app-mtwifi-cfg=y
+          CONFIG_PACKAGE_luci-i18n-mtwifi-cfg-zh-cn=y
+          CONFIG_PACKAGE_luci-app-turboacc-mtk=y
+          CONFIG_PACKAGE_luci-i18n-turboacc-mtk-zh-cn=y
+
+          # 核心功能 1：磁盘管理 (DiskMan) 及完整文件系统支持
+          CONFIG_PACKAGE_luci-app-diskman=y
+          CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y
+          CONFIG_PACKAGE_e2fsprogs=y
+          CONFIG_PACKAGE_parted=y
+          CONFIG_PACKAGE_blkid=y
+          CONFIG_PACKAGE_lsblk=y
+          CONFIG_PACKAGE_kmod-fs-ext4=y
+          CONFIG_PACKAGE_kmod-fs-exfat=y
+          CONFIG_PACKAGE_kmod-fs-ntfs3=y
+          CONFIG_PACKAGE_kmod-usb-storage=y
+          CONFIG_PACKAGE_kmod-usb-storage-uas=y
+
+          # 核心功能 2：网络共享 (Samba4局域网共享)
+          CONFIG_PACKAGE_luci-app-samba4=y
+          CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y
+          CONFIG_PACKAGE_wsdd2=y
+
+          # 核心功能 3：Transmission 下载器
+          CONFIG_PACKAGE_luci-app-transmission=y
+          CONFIG_PACKAGE_luci-i18n-transmission-zh-cn=y
+          CONFIG_PACKAGE_transmission-daemon=y
+          CONFIG_PACKAGE_transmission-web-control=y
+          EOF
+          make defconfig
+
+      - name: 7. 启用 dl 源码下载缓存加速
+        uses: actions/cache@v4
+        with:
+          path: openwrt/dl
+          key: closewrt-dl-${{ github.event.inputs.branch_name || '25.12' }}-${{ hashFiles('openwrt/.config') }}
+          restore-keys: |
+            closewrt-dl-${{ github.event.inputs.branch_name || '25.12' }}-
+            closewrt-dl-
+
+      - name: 8. 多线程预下载并清理残缺包
+        working-directory: ./openwrt
+        run: |
+          make download -j8
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+          make download -j4
+
+      - name: 9. 开始编译闭源驱动固件
+        working-directory: ./openwrt
+        run: |
+          make -j$(nproc) IGNORE_ERRORS=m V=s
+
+      - name: 10. 整理固件包并重命名为 xr30-emmc-closewrt
+        working-directory: ./openwrt
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/release_files"
+          cd bin/targets/mediatek/filogic/
+          for file in *rax3000m*; do
+            [ -e "$file" ] || continue
+            newname="${file/rax3000m/xr30-emmc-closewrt}"
+            cp "$file" "$GITHUB_WORKSPACE/release_files/$newname"
+          done
+          ls -lh "$GITHUB_WORKSPACE/release_files/"
+
+      - name: 11. 自动发布固件至 GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: xr30-emmc-closewrt-${{ github.event.inputs.branch_name || '25.12' }}-${{ github.run_number }}
+          name: CMCC XR30 eMMC 闭源无线 NAS 版 (${{ github.event.inputs.branch_name || '25.12' }})
+          files: ${{ github.workspace }}/release_files/*
+          body: |
+            - **源码版本**：`chasey-dev/immortalwrt-mt798x-rebase` (`${{ github.event.inputs.branch_name || '25.12' }}` 分支，带 MTK 闭源驱动)
+            - **设备型号**：`CMCC XR30 eMMC version`
+            - **包含功能**：MTK闭源无线与加速面板、磁盘管理 (`luci-app-diskman`)、网络共享 (`luci-app-samba4`)、BT/PT 下载 (`luci-app-transmission`)
