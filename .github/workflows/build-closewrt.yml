@@ -47,28 +47,14 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: 6. 生成闭源无线 + 纯净 NAS 固件配置 (.config)
+      - name: 6. 加载作者闭源模板并追加中文与 NAS 插件
         working-directory: ./openwrt
         run: |
-          cat << 'EOF' > .config
-          # 基础硬件平台：MT7981B (Filogic) - CMCC RAX3000M / XR30 eMMC
-          CONFIG_TARGET_mediatek=y
-          CONFIG_TARGET_mediatek_filogic=y
-          CONFIG_TARGET_mediatek_filogic_DEVICE_cmcc_rax3000m=y
-
-          # 基础中文网页管理界面 (LuCI)
-          CONFIG_PACKAGE_luci=y
-          CONFIG_PACKAGE_luci-base=y
+          cp defconfig/mt7981-ax3000.config .config
+          cat << 'EOF' >> .config
           CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
-          CONFIG_PACKAGE_luci-compat=y
-
-          # 联发科闭源 Wi-Fi 与硬件加速管理界面
-          CONFIG_PACKAGE_luci-app-mtwifi-cfg=y
           CONFIG_PACKAGE_luci-i18n-mtwifi-cfg-zh-cn=y
-          CONFIG_PACKAGE_luci-app-turboacc-mtk=y
           CONFIG_PACKAGE_luci-i18n-turboacc-mtk-zh-cn=y
-
-          # 核心功能 1：磁盘管理 (DiskMan) 及完整文件系统支持
           CONFIG_PACKAGE_luci-app-diskman=y
           CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y
           CONFIG_PACKAGE_e2fsprogs=y
@@ -80,13 +66,9 @@ jobs:
           CONFIG_PACKAGE_kmod-fs-ntfs3=y
           CONFIG_PACKAGE_kmod-usb-storage=y
           CONFIG_PACKAGE_kmod-usb-storage-uas=y
-
-          # 核心功能 2：网络共享 (Samba4局域网共享)
           CONFIG_PACKAGE_luci-app-samba4=y
           CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y
           CONFIG_PACKAGE_wsdd2=y
-
-          # 核心功能 3：Transmission 下载器
           CONFIG_PACKAGE_luci-app-transmission=y
           CONFIG_PACKAGE_luci-i18n-transmission-zh-cn=y
           CONFIG_PACKAGE_transmission-daemon=y
