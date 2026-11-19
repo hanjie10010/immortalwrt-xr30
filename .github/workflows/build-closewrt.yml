@@ -18,7 +18,7 @@ jobs:
       - name: 1. 检出当前仓库
         uses: actions/checkout@v4
 
-      - name: 2. 极速安装编译环境依赖 (约2分钟)
+      - name: 2. 安装编译环境依赖
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo apt-get update -y
@@ -27,13 +27,12 @@ jobs:
             python3-setuptools python3-dev rsync unzip zlib1g-dev file wget \
             curl cpio qemu-utils squashfs-tools zstd device-tree-compiler swig time
 
-      - name: 3. 拉取 chasey-dev 闭源驱动源码 (防吞链接校验)
+      - name: 3. 拉取 chasey-dev 闭源驱动源码
         run: |
           PROTO="https"
           HOST="github.com"
           REPO="chasey-dev/immortalwrt-mt798x-rebase.git"
           git clone --depth 1 -b ${{ github.event.inputs.branch_name || '25.12' }} "${PROTO}://${HOST}/${REPO}" openwrt
-          ls -ld openwrt/scripts
 
       - name: 4. 修改底层设备树型号为 CMCC XR30 eMMC version
         working-directory: ./openwrt
@@ -47,36 +46,27 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: 6. 加载作者闭源模板并内置全套科学上网与 NAS 依赖
+      - name: 6. 生成闭源驱动 + NAS + 代理底层模块配置
         working-directory: ./openwrt
         run: |
           cp defconfig/mt7981-ax3000.config .config
           cat << 'EOF' >> .config
-          # 中文语言包
+          # 中文界面
           CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
           CONFIG_PACKAGE_luci-i18n-mtwifi-cfg-zh-cn=y
           CONFIG_PACKAGE_luci-i18n-turboacc-mtk-zh-cn=y
 
-          # Tailscale 远程组网与科学上网插件（PassWall 2 / OpenClash）全套底层依赖
-          CONFIG_PACKAGE_tailscale=y
+          # 仅保留 Tailscale 与 PassWall 2 必需的底层内核模块与工具（本体进系统后再装）
           CONFIG_PACKAGE_kmod-tun=y
           CONFIG_PACKAGE_kmod-nft-tproxy=y
           CONFIG_PACKAGE_kmod-nft-socket=y
-          CONFIG_PACKAGE_kmod-nft-nat=y
-          CONFIG_PACKAGE_kmod-nft-fib=y
           CONFIG_PACKAGE_kmod-inet-diag=y
           CONFIG_PACKAGE_kmod-netlink-diag=y
-          CONFIG_PACKAGE_ipset=y
-          CONFIG_PACKAGE_ip-full=y
-          CONFIG_PACKAGE_iptables-nft=y
-          CONFIG_PACKAGE_iptables-mod-tproxy=y
-          CONFIG_PACKAGE_iptables-mod-extra=y
-          CONFIG_PACKAGE_ca-bundle=y
+          CONFIG_PACKAGE_chinadns-ng=y
           CONFIG_PACKAGE_curl=y
           CONFIG_PACKAGE_unzip=y
-          CONFIG_PACKAGE_chinadns-ng=y
 
-          # 磁盘管理 (DiskMan) 及完整文件系统支持
+          # 磁盘管理 (DiskMan) 及常见文件系统
           CONFIG_PACKAGE_luci-app-diskman=y
           CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y
           CONFIG_PACKAGE_e2fsprogs=y
@@ -89,7 +79,7 @@ jobs:
           CONFIG_PACKAGE_kmod-usb-storage=y
           CONFIG_PACKAGE_kmod-usb-storage-uas=y
 
-          # 网络共享 (Samba4局域网共享)
+          # 网络共享 (Samba4)
           CONFIG_PACKAGE_luci-app-samba4=y
           CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y
           CONFIG_PACKAGE_wsdd2=y
@@ -99,9 +89,6 @@ jobs:
           CONFIG_PACKAGE_luci-i18n-transmission-zh-cn=y
           CONFIG_PACKAGE_transmission-daemon=y
           CONFIG_PACKAGE_transmission-web-control=y
-
-          # 编译当前内核所有 kmod 备用（单独打包，不增加固件体积）
-          
           EOF
           make defconfig
 
@@ -114,20 +101,19 @@ jobs:
             closewrt-dl-${{ github.event.inputs.branch_name || '25.12' }}-
             closewrt-dl-
 
-      - name: 8. 多线程预下载并清理残缺包
+      - name: 8. 预下载并清理残缺源码包
         working-directory: ./openwrt
         run: |
           make download -j8
-          find dl -size -1024c -exec ls -l {} \;
           find dl -size -1024c -exec rm -f {} \;
           make download -j4
 
       - name: 9. 开始编译闭源驱动固件
         working-directory: ./openwrt
         run: |
-          make -j$(nproc) IGNORE_ERRORS=m V=s
+          make -j$(nproc)
 
-      - name: 10. 整理固件包并打包全量 kmod 备用仓库
+      - name: 10. 整理并重命名 XR30 固件包
         working-directory: ./openwrt
         run: |
           mkdir -p "$GITHUB_WORKSPACE/release_files"
@@ -137,21 +123,14 @@ jobs:
             newname="${file/rax3000m/xr30-emmc-closewrt}"
             cp "$file" "$GITHUB_WORKSPACE/release_files/$newname"
           done
-          
           ls -lh "$GITHUB_WORKSPACE/release_files/"
 
       - name: 11. 自动发布固件至 GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: xr30-emmc-closewrt-${{ github.event.inputs.branch_name || '25.12' }}-${{ github.run_number }}
-          name: CMCC XR30 eMMC 闭源无线完全体 (${{ github.event.inputs.branch_name || '25.12' }})
+          name: CMCC XR30 eMMC 闭源无线纯净版 (${{ github.event.inputs.branch_name || '25.12' }})
           files: ${{ github.workspace }}/release_files/*
           body: |
-            - **源码版本**：`chasey-dev/immortalwrt-mt798x-rebase` (`${{ github.event.inputs.branch_name || '25.12' }}` 分支，带 MTK 闭源驱动与 HWNAT/WED 硬件加速)
-            - **设备型号**：`CMCC XR30 eMMC version`
-            - **内置功能**：
-              - 联发科闭源无线 (`kmod-mt_wifi`) 与全速硬件加速 (`kmod-mediatek_hnat`)
-              - 远程组网：`Tailscale`（含 `kmod-tun`）
-              - 科学上网底层全套依赖（`kmod-nft-tproxy` / `inet-diag` / `chinadns-ng` 等，直接支持 PassWall 2 / OpenClash）
-              - NAS 套件：`DiskMan` 磁盘管理、`Samba4` 局域网共享、`Transmission` 下载器
-              - 附带全量内核模块压缩包 `xr30-all-kmods.tar.gz` 供日后扩展任意插件
+            - **源码版本**：`chasey-dev/immortalwrt-mt798x-rebase` (`${{ github.event.inputs.branch_name || '25.12' }}`)
+            - **内置功能**：MTK 闭源 Wi-Fi 与 HWNAT 硬件加速、Tailscale 与 PassWall 2 底层内核模块、DiskMan、Samba4、Transmission
