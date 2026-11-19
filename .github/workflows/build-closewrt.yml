@@ -101,7 +101,7 @@ jobs:
           CONFIG_PACKAGE_transmission-web-control=y
 
           # 编译当前内核所有 kmod 备用（单独打包，不增加固件体积）
-          CONFIG_ALL_KMODS=y
+          
           EOF
           make defconfig
 
@@ -137,7 +137,7 @@ jobs:
             newname="${file/rax3000m/xr30-emmc-closewrt}"
             cp "$file" "$GITHUB_WORKSPACE/release_files/$newname"
           done
-          tar -czf "$GITHUB_WORKSPACE/release_files/xr30-all-kmods.tar.gz" packages/
+          
           ls -lh "$GITHUB_WORKSPACE/release_files/"
 
       - name: 11. 自动发布固件至 GitHub Releases
