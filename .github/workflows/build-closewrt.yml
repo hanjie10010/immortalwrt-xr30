@@ -46,27 +46,43 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: 6. 生成闭源驱动 + NAS + 代理底层模块配置
+      - name: 6. 生成 XR30 单机型闭源驱动 + 常用插件底层 + NAS 配置
         working-directory: ./openwrt
         run: |
           cp defconfig/mt7981-ax3000.config .config
+
+          # 关闭多机型全量编译，彻底剔除其他小闪存路由器型号，只保留 XR30/RAX3000M
+          sed -i 's/CONFIG_TARGET_MULTI_PROFILE=y/# CONFIG_TARGET_MULTI_PROFILE is not set/g' .config
+          sed -i 's/CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_/# CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_/g' .config
+
           cat << 'EOF' >> .config
+          # 锁定目标单机型：CMCC RAX3000M / XR30 eMMC
+          CONFIG_TARGET_mediatek_filogic_DEVICE_cmcc_rax3000m=y
+          CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_cmcc_rax3000m=y
+
           # 中文界面
           CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
           CONFIG_PACKAGE_luci-i18n-mtwifi-cfg-zh-cn=y
           CONFIG_PACKAGE_luci-i18n-turboacc-mtk-zh-cn=y
 
-          # 仅保留 Tailscale 与 PassWall 2 必需的底层内核模块与工具（本体进系统后再装）
+          # 常用插件（PassWall 2 / OpenClash / Tailscale / WireGuard）底层内核模块与工具
           CONFIG_PACKAGE_kmod-tun=y
+          CONFIG_PACKAGE_kmod-wireguard=y
           CONFIG_PACKAGE_kmod-nft-tproxy=y
           CONFIG_PACKAGE_kmod-nft-socket=y
+          CONFIG_PACKAGE_kmod-nft-nat=y
+          CONFIG_PACKAGE_kmod-nft-fib=y
           CONFIG_PACKAGE_kmod-inet-diag=y
           CONFIG_PACKAGE_kmod-netlink-diag=y
+          CONFIG_PACKAGE_ipset=y
+          CONFIG_PACKAGE_ip-full=y
           CONFIG_PACKAGE_chinadns-ng=y
+          CONFIG_PACKAGE_ca-bundle=y
+          CONFIG_PACKAGE_ca-certificates=y
           CONFIG_PACKAGE_curl=y
           CONFIG_PACKAGE_unzip=y
 
-          # 磁盘管理 (DiskMan) 及常见文件系统
+          # 磁盘管理 (DiskMan) 及全兼容文件系统与编码
           CONFIG_PACKAGE_luci-app-diskman=y
           CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y
           CONFIG_PACKAGE_e2fsprogs=y
@@ -76,6 +92,10 @@ jobs:
           CONFIG_PACKAGE_kmod-fs-ext4=y
           CONFIG_PACKAGE_kmod-fs-exfat=y
           CONFIG_PACKAGE_kmod-fs-ntfs3=y
+          CONFIG_PACKAGE_kmod-fs-vfat=y
+          CONFIG_PACKAGE_kmod-nls-utf8=y
+          CONFIG_PACKAGE_kmod-nls-cp437=y
+          CONFIG_PACKAGE_kmod-nls-iso8859-1=y
           CONFIG_PACKAGE_kmod-usb-storage=y
           CONFIG_PACKAGE_kmod-usb-storage-uas=y
 
@@ -108,7 +128,7 @@ jobs:
           find dl -size -1024c -exec rm -f {} \;
           make download -j4
 
-      - name: 9. 开始编译闭源驱动固件
+      - name: 9. 开始编译 XR30 单机型闭源驱动固件
         working-directory: ./openwrt
         run: |
           make -j$(nproc)
@@ -129,8 +149,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: xr30-emmc-closewrt-${{ github.event.inputs.branch_name || '25.12' }}-${{ github.run_number }}
-          name: CMCC XR30 eMMC 闭源无线纯净版 (${{ github.event.inputs.branch_name || '25.12' }})
+          name: CMCC XR30 eMMC 闭源无线单机型版 (${{ github.event.inputs.branch_name || '25.12' }})
           files: ${{ github.workspace }}/release_files/*
           body: |
             - **源码版本**：`chasey-dev/immortalwrt-mt798x-rebase` (`${{ github.event.inputs.branch_name || '25.12' }}`)
-            - **内置功能**：MTK 闭源 Wi-Fi 与 HWNAT 硬件加速、Tailscale 与 PassWall 2 底层内核模块、DiskMan、Samba4、Transmission
+            - **目标机型**：仅编译 `CMCC XR30 eMMC version`（已剔除小闪存机型防溢出）
+            - **内置功能**：MTK 闭源 Wi-Fi 与 HWNAT 硬件加速、常用代理/组网底层内核模块、DiskMan、Samba4、Transmission
